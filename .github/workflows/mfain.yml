@@ -1,0 +1,99 @@
+name: Vast.ai Windows 11 VM with Tailscale
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
+      - name: Generate random credentials
+        id: creds
+        run: |
+          USER="user$(shuf -i 1000-9999 -n 1)"
+          PASS="pass$(openssl rand -hex 4)"
+          echo "USERNAME=$USER" >> $GITHUB_ENV
+          echo "PASSWORD=$PASS" >> $GITHUB_ENV
+          echo "Generated user: $USER"
+          echo "Generated pass: $PASS"
+
+      - name: Pick Vast.ai server (64GB RAM + 1TB SSD)
+        id: pick_server
+        run: |
+          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.VAST_API_KEY }}" \
+            "https://api.vast.ai/v0/bundles?type=on-demand&verified=true&min_ram=64000&min_disk=1000")
+
+          echo "Raw response:"
+          echo "$RESPONSE"
+
+          # verificăm dacă JSON valid
+          echo "$RESPONSE" | jq . >/dev/null 2>&1
+          if [ $? -ne 0 ]; then
+            echo "❌ Response is not valid JSON. Check your API key and account."
+            exit 1
+          fi
+
+          # selectăm primul server disponibil
+          OFFER_ID=$(echo "$RESPONSE" | jq -r '.offers[0].id // empty')
+          if [ -z "$OFFER_ID" ]; then
+            echo "❌ No offer found with requested specs. Check available servers."
+            exit 1
+          fi
+          echo "OFFER_ID=$OFFER_ID" >> $GITHUB_ENV
+          echo "Selected offer ID: $OFFER_ID"
+
+      - name: Deploy Windows VM
+        id: deploy_vm
+        run: |
+          DEPLOY=$(curl -s -X POST "https://api.vast.ai/v0/instances" \
+            -H "Authorization: Bearer ${{ secrets.VAST_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"client_id\": $OFFER_ID, \"image\": \"microsoft/windows-server-2022\"}")
+
+          echo "Deployment response:"
+          echo "$DEPLOY"
+
+          INSTANCE_ID=$(echo "$DEPLOY" | jq -r '.id // empty')
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "❌ Failed to create instance."
+            exit 1
+          fi
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+          echo "Created VM instance ID: $INSTANCE_ID"
+
+      - name: Get VM IP
+        id: get_ip
+        run: |
+          INFO=$(curl -s -H "Authorization: Bearer ${{ secrets.VAST_API_KEY }}" \
+            "https://api.vast.ai/v0/instances/${INSTANCE_ID}/")
+
+          VM_IP=$(echo "$INFO" | jq -r '.ip // empty')
+          if [ -z "$VM_IP" ]; then
+            echo "❌ Failed to get VM IP."
+            exit 1
+          fi
+          echo "VM_IP=$VM_IP" >> $GITHUB_ENV
+          echo "============================"
+          echo " VM Public IP: $VM_IP"
+          echo "============================"
+
+      - name: Show connection details
+        run: |
+          echo "============================"
+          echo " Vast.ai Windows VM Details"
+          echo "============================"
+          echo "User: $USERNAME"
+          echo "Pass: $PASSWORD"
+          echo "VM Public IP: $VM_IP"
+          echo "RDP: folosește Remote Desktop cu IP-ul de mai sus"
+          echo "⚡ Pentru Tailscale: conectează-te prin RDP și rulează:"
+          echo "  irm https://tailscale.com/install.ps1 | iex"
+          echo "  tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }}"
+          
