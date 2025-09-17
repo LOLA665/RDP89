@@ -1,0 +1,66 @@
+name: Vast.ai Windows VM with Tailscale
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
+      - name: Pick Vast.ai server (64GB RAM + 1TB SSD)
+        run: |
+          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.VAST_API_KEY }}" \
+            "https://vast.ai/api/v0/bundles?type=on-demand&verified=true&min_ram=64000&min_disk=1000")
+
+          echo "$RESPONSE" | jq '.offers[0]' > offer.json
+          OFFER_ID=$(jq -r '.id' offer.json)
+
+          echo "OFFER_ID=$OFFER_ID" >> $GITHUB_ENV
+
+      - name: Deploy Windows VM
+        run: |
+          USER="user$(shuf -i 1000-9999 -n 1)"
+          PASS="pass$(openssl rand -hex 4)"
+
+          echo "USERNAME=$USER" >> $GITHUB_ENV
+          echo "PASSWORD=$PASS" >> $GITHUB_ENV
+
+          DEPLOY=$(curl -s -X POST "https://vast.ai/api/v0/instances" \
+            -H "Authorization: Bearer ${{ secrets.VAST_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"client_id\": $OFFER_ID, \"image\": \"microsoft/windows-server-2022\"}")
+
+          echo "$DEPLOY" | jq '.'
+          INSTANCE_ID=$(echo "$DEPLOY" | jq -r '.id')
+
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+
+      - name: Get VM IP
+        run: |
+          INFO=$(curl -s -H "Authorization: Bearer ${{ secrets.VAST_API_KEY }}" \
+            "https://vast.ai/api/v0/instances/${INSTANCE_ID}/")
+          VM_IP=$(echo "$INFO" | jq -r '.ip')
+          echo "VM_IP=$VM_IP" >> $GITHUB_ENV
+
+      - name: Install Tailscale (via WinRM/PowerShell)
+        run: |
+          echo "⚡ Conectează-te manual prin RDP la $VM_IP"
+          echo "Apoi rulează în PowerShell de pe VM:"
+          echo "  irm https://tailscale.com/install.ps1 | iex"
+          echo "  tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }}"
+
+      - name: Show connection details
+        run: |
+          echo "============================"
+          echo " Vast.ai Windows VM Details"
+          echo "============================"
+          echo "User: $USERNAME"
+          echo "Pass: $PASSWORD"
+          echo "VM Public IP: $VM_IP"
+          echo "Tailscale: vezi în Admin Console după ce rulezi comanda pe VM"
+          
